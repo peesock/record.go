@@ -1,6 +1,4 @@
 BIN=record
-CC=gcc
-export CC
 build:
 	go build -trimpath -buildvcs=false .
 clean:
