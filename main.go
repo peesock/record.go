@@ -93,7 +93,7 @@ func main(){
 	fp, err := os.OpenFile(stateFifo, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			err = syscall.Mknod(stateFifo, syscall.S_IFIFO|0666, 0)
+			err = syscall.Mkfifo(stateFifo, 0640)
 			if err != nil {
 				log.error("%v", err)
 			}
@@ -101,22 +101,25 @@ func main(){
 			log.error("%v", err)
 		}
 	}
-	n, _ := fp.Read([]byte{0})
+
+	buf := make([]byte, 32)
+	n, _ := fp.Read(buf)
 	if n > 0 { // has a writer; there is a process
-		buf, err := os.ReadFile(stateFile)
-		var pid int
-		if err != nil {
-			if os.IsNotExist(err) {
-				pid = 0
-				goto next
-			} else {
-				log.error("%v", err)
+		start := -1
+		end := 0
+		for i, v := range buf {
+			if v == 0 {
+				if start < 0 {
+					start = i+1
+				} else {
+					end = i
+					break
+				}
 			}
-			os.Exit(1)
 		}
-		pid, _ = strconv.Atoi(string(buf))
-		next:
-		log.info("pid: %d", pid)
+		pid, _ := strconv.Atoi(string(buf[start:end]))
+
+		// log.info("pid: %d", pid)
 		if len(os.Args) == 3 {
 			switch os.Args[2] {
 			case "regular":
@@ -148,11 +151,13 @@ func main(){
 		}
 		return
 	}
+	// not currently running, so start
 
-	// write to the fifo to show we are alive
+	// write to the fifo with our pid to show we are alive
 	go func(){
+		buf := []byte(strconv.Itoa(os.Getpid()))
+		buf = append(buf, 0)
 		fp, _ := os.OpenFile(stateFifo, os.O_WRONLY, 0)
-		buf := make([]byte, 1024)
 		for {
 			fp.Write(buf)
 		}
@@ -260,22 +265,6 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		os.Exit(1)
 	}
 
-	// default output file name
-	_, b = config["-o"]
-	if !b {
-		if outDir == "" {
-			log.error("need an output dir or file.")
-			os.Exit(1)
-		}
-		fp, err := os.CreateTemp(outDir, "vid-")
-		if err != nil {
-			log.error("couldn't create tmpfile: %v", err)
-			os.Exit(1)
-		}
-		fp.Close()
-		config["-o"] = fp.Name()
-	}
-
 	switch os.Args[n] {
 	case "screen":
 		config["-w"] = "screen"
@@ -321,11 +310,27 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 					log.error("must set output dir for clipper")
 					os.Exit(1)
 				}
-				config["-o"] = outDir
 			} else {
 				config["-r"] = "60"
 			}
+			config["-o"] = outDir
 		}
+	}
+
+	// default output file name
+	_, b = config["-o"]
+	if !b {
+		if outDir == "" {
+			log.error("need an output dir or file.")
+			os.Exit(1)
+		}
+		fp, err := os.CreateTemp(outDir, "vid-")
+		if err != nil {
+			log.error("couldn't create tmpfile: %v", err)
+			os.Exit(1)
+		}
+		fp.Close()
+		config["-o"] = fp.Name()
 	}
 
 	recordArgs := make([]string, 0, 8)
@@ -386,7 +391,6 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	sigs := make(chan os.Signal, 1)
-	done := make(chan bool)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
 
 	waiting := true
@@ -398,6 +402,7 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		for sig := range sigs {
 			switch sig {
 			case syscall.SIGINT, syscall.SIGTERM:
+				waiting = false
 				syscall.Kill(cmd.Process.Pid, syscall.SIGINT)
 			case syscall.SIGUSR1:
 				_, b = config["-r"]
@@ -416,39 +421,27 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 					}
 				}
 			case syscall.SIGUSR2:
-				waiting = false
-				// finish up...
+				// clip or video finished
 				path, err := os.ReadFile(stateFile)
 				if err != nil {
 					log.error("%v", err)
 				}
 				recordHook(string(path))
-				done <- true
 			}
 		}
 	}()
 
 	cmd.Start()
-	go func(){
-		cmd.Wait()
-		if waiting {
-			time.Sleep(time.Millisecond * 1000)
-			os.Exit(cmd.ProcessState.ExitCode())
-		}
-	}()
 
-	err = os.WriteFile(stateFile, []byte(strconv.Itoa(os.Getpid())), 0640)
-	if err != nil {
-		log.error("pid file writing error: %v", err)
-		cmd.Process.Kill()
-		os.Exit(1)
-	}
-
-	<- done
+	cmd.Wait()
 
 	err = os.WriteFile(stateFile, []byte{}, 0640)
 	if err != nil {
 		log.error("%v", err)
 		os.Exit(1)
+	}
+
+	if waiting {
+		os.Exit(cmd.ProcessState.ExitCode())
 	}
 }
