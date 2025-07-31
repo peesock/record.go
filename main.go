@@ -275,6 +275,11 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 			return
 		}
 		config["-region"] = string(region)
+		// _, b = config["-s"]
+		// if !b {
+		// 	before, _, _ := strings.Cut(string(region), "+")
+		// 	config["-s"] = before
+		// }
 	}
 
 	if n+1 < arglen {
@@ -365,8 +370,6 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 			}
 		}
 		recordArgs = append(recordArgs, "-s", string(xrandr[start:end]))
-	} else {
-		recordArgs = append(recordArgs, "-s", "0x0")
 	}
 
 	cmd = exec.Command("gpu-screen-recorder", recordArgs...)

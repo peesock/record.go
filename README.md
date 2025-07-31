@@ -48,4 +48,5 @@ Run `record -h` for the list of options and recording targets.
 
 ## Todo
 
-Some stuff, like ffmpeging finished videos, user-supplied file namers, quiet mode.
+Some stuff, like ffmpeging finished videos, user-supplied file namers, quiet mode, homecooking
+region mode, apparently.
