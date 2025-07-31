@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -67,27 +69,24 @@ func recordHook(path string){
 	}
 }
 
-var stateFile string
 var stateFifo string
 var config map[string] string
 var outDir string
 
 func main(){
-
 	var b bool
-	stateFile, b = os.LookupEnv("XDG_RUNTIME_DIR")
+	stateFifo, b = os.LookupEnv("XDG_RUNTIME_DIR")
 	if !b {
-		stateFile = "/run/user/" + strconv.Itoa(os.Getuid())
+		stateFifo = "/run/user/" + strconv.Itoa(os.Getuid())
 	}
 
-	_, err := os.Stat(stateFile);
+	_, err := os.Stat(stateFifo);
 	if err != nil {
 		log.error("%v", err)
 		os.Exit(1)
 	}
 
-	stateFifo = stateFile + "/" + programName + ".status"
-	stateFile = stateFile + "/" + programName
+	stateFifo = stateFifo + "/" + programName + ".status"
 
 	// determine status of fifo
 	fp, err := os.OpenFile(stateFifo, os.O_RDONLY|syscall.O_NONBLOCK, 0)
@@ -104,6 +103,7 @@ func main(){
 
 	buf := make([]byte, 32)
 	n, _ := fp.Read(buf)
+
 	if n > 0 { // has a writer; there is a process
 		start := -1
 		end := 0
@@ -120,38 +120,25 @@ func main(){
 		pid, _ := strconv.Atoi(string(buf[start:end]))
 
 		// log.info("pid: %d", pid)
-		if len(os.Args) == 3 {
-			switch os.Args[2] {
-			case "regular":
-			case "replay":
-			default:
-				goto skip
-			}
-			// called with recorder.
-			err = os.WriteFile(stateFile, []byte(os.Args[1]), 0640)
-			if err != nil {
-				log.error("recorder write error: %v", err)
-			}
-			log.info("Sending SIGUSR2")
-			syscall.Kill(pid, syscall.SIGUSR2)
-			return
-		}
-		skip:
-		// if stopping, sigint
-		// if pausing/playing or clipping, sigusr1
 		if len(os.Args) > 1 {
-			switch os.Args[1] {
-			case "toggle", "clip":
-				log.info("Sending SIGUSR1")
-				syscall.Kill(pid, syscall.SIGUSR1)
-			}
-		} else {
 			log.info("Sending SIGINT")
 			syscall.Kill(pid, syscall.SIGINT)
+		} else {
+			log.info("Sending SIGUSR1")
+			syscall.Kill(pid, syscall.SIGUSR1)
 		}
 		return
 	}
 	// not currently running, so start
+	// unless the user just wanted to kill a previous session
+	arglen := len(os.Args)
+	if arglen < 2 {
+		os.Exit(1)
+	}
+	switch os.Args[1] {
+	case "kill", "stop", "end":
+		os.Exit(1)
+	}
 
 	// write to the fifo with our pid to show we are alive
 	go func(){
@@ -176,7 +163,6 @@ func main(){
 		ch <- screenStr
 	}()
 	config = make(map[string] string)
-	config["-sc"] = programName
 	config["-c"] = "matroska"
 	config["-q"] = "ultra"
 	config["-k"] = "auto"
@@ -188,10 +174,6 @@ func main(){
 	config["-ab"] = "256k"
 	config["-v"] = "no"
 
-	arglen := len(os.Args)
-	if arglen < 2 {
-		os.Exit(1)
-	}
 	var arg string
 	n = 1
 	for n < arglen {
@@ -388,17 +370,17 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 	}
 
 	cmd = exec.Command("gpu-screen-recorder", recordArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
+	reader, writer := io.Pipe()
+	cmd.Stdout = writer
+	cmd.Stderr = os.Stderr
 
 	waiting := true
-	// INT, TERM to finish recording or stop clipping
-	// USR1 to pause recording or make a clip
-	// USR2 is sent by recorder to say it finished (and wrote to statefile)
 	go func(){
 		paused := false
+		// INT, TERM to finish recording or stop clipping
+		// USR1 to pause recording or make a clip
 		for sig := range sigs {
 			switch sig {
 			case syscall.SIGINT, syscall.SIGTERM:
@@ -420,28 +402,31 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 						notify("Resumed")
 					}
 				}
-			case syscall.SIGUSR2:
-				// clip or video finished
-				path, err := os.ReadFile(stateFile)
-				if err != nil {
-					log.error("%v", err)
-				}
-				recordHook(string(path))
 			}
 		}
 	}()
 
-	cmd.Start()
+	go func(){
+		// detects clips
+		scan := bufio.NewScanner(reader)
+		for scan.Scan() {
+			recordHook(scan.Text())
+		}
+	}()
 
-	cmd.Wait()
-
-	err = os.WriteFile(stateFile, []byte{}, 0640)
-	if err != nil {
-		log.error("%v", err)
-		os.Exit(1)
+	cmd.Run()
+	_, b = config["-r"]
+	if !b {
+		recordHook(config["-o"])
 	}
 
 	if waiting {
+		notify("Recorder error")
 		os.Exit(cmd.ProcessState.ExitCode())
+	}
+	if b {
+		notify("Stopped clipping")
+	} else {
+		notify("Done")
 	}
 }
