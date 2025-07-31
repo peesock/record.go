@@ -48,8 +48,11 @@ func (l logger) error(format string, args ...any) {
 	}
 }
 
+var quiet bool = false
 func notify(msg string){
-	exec.Command("notify-send", "-t", "2000", programName, msg).Start()
+	if !quiet {
+		exec.Command("notify-send", "-t", "2000", programName, msg).Start()
+	}
 }
 
 func recordHook(path string){
@@ -208,12 +211,14 @@ func main(){
 		case "-s":
 			config["-s"] = os.Args[n+1]
 			n++
-		case "-vq":
-			config["-ab"] = os.Args[n+1]
-			n++
 		case "-vc":
 			config["-ab"] = os.Args[n+1]
 			n++
+		case "-vq":
+			config["-ab"] = os.Args[n+1]
+			n++
+		case "-q":
+			quiet=true
 		case "-h", "-help", "--help":
 			fmt.Println(
 `opts:
@@ -227,6 +232,7 @@ func main(){
 -s WxH -- set resolution
 -vc codec -- set video codec
 -vq quality -- set video quality
+-q -- quiet mode, no notifications
 targets:
 screen -- record first monitor
 follow -- record followed windows
@@ -282,9 +288,11 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		// }
 	}
 
+	clipping := false
 	if n+1 < arglen {
 		switch os.Args[n+1] {
 		case "clipper":
+			clipping = true
 			if n+2 < arglen {
 				secs := os.Args[n+2]
 				secn, err := strconv.Atoi(secs)
@@ -390,8 +398,7 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 				waiting = false
 				syscall.Kill(cmd.Process.Pid, syscall.SIGINT)
 			case syscall.SIGUSR1:
-				_, b = config["-r"]
-				if b {
+				if clipping {
 					// clip
 					syscall.Kill(cmd.Process.Pid, syscall.SIGUSR1)
 					notify("Clipped")
@@ -417,9 +424,15 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		}
 	}()
 
+	if clipping {
+		notify("Starting clipper")
+	} else {
+		notify("Starting")
+	}
+
 	cmd.Run()
-	_, b = config["-r"]
-	if !b {
+
+	if !clipping {
 		recordHook(config["-o"])
 	}
 
@@ -427,7 +440,7 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		notify("Recorder error")
 		os.Exit(cmd.ProcessState.ExitCode())
 	}
-	if b {
+	if clipping {
 		notify("Stopped clipping")
 	} else {
 		notify("Done")
