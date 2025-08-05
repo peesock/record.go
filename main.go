@@ -124,22 +124,22 @@ func main(){
 
 		// log.info("pid: %d", pid)
 		if len(os.Args) > 1 {
-			log.info("Sending SIGINT")
-			syscall.Kill(pid, syscall.SIGINT)
-		} else {
 			log.info("Sending SIGUSR1")
 			syscall.Kill(pid, syscall.SIGUSR1)
+		} else {
+			log.info("Sending SIGINT")
+			syscall.Kill(pid, syscall.SIGINT)
 		}
 		return
 	}
 	// not currently running, so start
-	// unless the user just wanted to kill a previous session
+	// unless the user just wanted to act on a previous session
 	arglen := len(os.Args)
 	if arglen < 2 {
 		os.Exit(1)
 	}
 	switch os.Args[1] {
-	case "kill", "stop", "end":
+	case "action":
 		os.Exit(1)
 	}
 
@@ -212,10 +212,10 @@ func main(){
 			config["-s"] = os.Args[n+1]
 			n++
 		case "-vc":
-			config["-ab"] = os.Args[n+1]
+			config["-k"] = os.Args[n+1]
 			n++
 		case "-vq":
-			config["-ab"] = os.Args[n+1]
+			config["-q"] = os.Args[n+1]
 			n++
 		case "-q":
 			quiet=true
