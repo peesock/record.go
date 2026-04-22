@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unicode"
@@ -169,6 +170,7 @@ func main(){
 	config["-c"] = "matroska"
 	config["-q"] = "ultra"
 	config["-k"] = "auto"
+	config["-cr"] = "full"
 
 	var audiodevs []string
 	audiodevs = append(audiodevs, "default_output")
@@ -217,6 +219,9 @@ func main(){
 		case "-vq":
 			config["-q"] = os.Args[n+1]
 			n++
+		case "-cr":
+			config["-cr"] = os.Args[n+1]
+			n++
 		case "-q":
 			quiet=true
 		case "-h", "-help", "--help":
@@ -232,14 +237,17 @@ func main(){
 -s WxH -- set resolution
 -vc codec -- set video codec
 -vq quality -- set video quality
+-cr "limited|full" -- set color range
 -q -- quiet mode, no notifications
 targets:
 screen -- record first monitor
 follow -- record followed windows
 region -- select a region to record
 portal -- use wayland screen recording portal
-target flags:
-clipper [seconds] -- shadowplay mode, default length = 60s`)
+target args:
+clipper[=SECONDS] -- shadowplay mode, default SECONDS = 60
+usage:
+record [OPTS] TARGET [TARGET-ARGS] [GSR-ARGS]`)
 			return
 		default:
 			goto end
@@ -289,18 +297,19 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 	}
 
 	clipping := false
-	if n+1 < arglen {
-		switch os.Args[n+1] {
-		case "clipper":
+	n++
+	if n < arglen {
+		switch {
+		case strings.HasPrefix(os.Args[n], "clipper"):
+			secs, hasSecs := strings.CutPrefix(os.Args[n], "clipper=")
 			clipping = true
-			if n+2 < arglen {
-				secs := os.Args[n+2]
+			if hasSecs {
 				secn, err := strconv.Atoi(secs)
-				if secn < 5 || secn > 1200 || err != nil {
+				if secn < 2 || secn > 86400 || err != nil {
 					log.error("bad args for clipper")
 					os.Exit(1)
 				}
-				config["-r"] = os.Args[n+2]
+				config["-r"] = secs
 				if outDir == "" {
 					log.error("must set output dir for clipper")
 					os.Exit(1)
@@ -309,6 +318,7 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 				config["-r"] = "60"
 			}
 			config["-o"] = outDir
+			n++
 		}
 	}
 
@@ -380,7 +390,8 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		recordArgs = append(recordArgs, "-s", string(xrandr[start:end]))
 	}
 
-	cmd = exec.Command("gpu-screen-recorder", recordArgs...)
+	cmd = exec.Command("gpu-screen-recorder", append(recordArgs, os.Args[n:]...)...)
+	// log.log("GSR command:", cmd.Args)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
 	reader, writer := io.Pipe()
@@ -416,21 +427,29 @@ clipper [seconds] -- shadowplay mode, default length = 60s`)
 		}
 	}()
 
-	go func(){
-		// detects clips
-		scan := bufio.NewScanner(reader)
-		for scan.Scan() {
-			recordHook(scan.Text())
-		}
-	}()
-
 	if clipping {
 		notify("Starting clipper")
 	} else {
 		notify("Starting")
 	}
 
-	cmd.Run()
+	cmd.Start()
+
+	go func(){
+		// detects clips
+		scan := bufio.NewScanner(reader)
+		line := ""
+		for scan.Scan() {
+			line = scan.Text()
+			println(line)
+			if strings.HasPrefix(line, "usage: gpu-screen-recorder"){
+				continue
+			}
+			recordHook(line)
+		}
+	}()
+
+	cmd.Wait()
 
 	if !clipping {
 		recordHook(config["-o"])
