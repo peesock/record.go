@@ -57,16 +57,26 @@ func notify(msg string){
 }
 
 func recordHook(path string){
+	stat, err := os.Stat(path)
+	if err != nil {
+		log.error("%v", err)
+		os.Exit(1)
+	}
+	if stat.Size() == 0 {
+		os.Remove(path)
+		return
+	}
 	if outDir == "" {
 		return // explicit output
 	}
 	t := time.Now()
 	ext := "mkv"
 	name := fmt.Sprintf("%d%02d%02d-%02d%02d%02d-%d",
+	// TODO: let user set dynamic filename
 	t.Year(), t.Month(), t.Day(),
 	t.Hour(), t.Minute(), t.Second(),
 	t.Nanosecond() / 1000000)
-	err := os.Rename(path, filepath.Dir(path) + "/" + name + "." + ext)
+	err = os.Rename(path, filepath.Dir(path) + "/" + name + "." + ext)
 	if err != nil {
 		log.error("%v", err)
 		os.Exit(1)
